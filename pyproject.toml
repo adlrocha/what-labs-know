@@ -3,6 +3,7 @@ name = "what-labs-know"
 version = "0.1.0"
 description = "Measure what each AI provider received from your chat and agent history, and what a model can infer from it"
 requires-python = ">=3.11"
+license = "MIT"
 
 [tool.ruff]
 line-length = 120
