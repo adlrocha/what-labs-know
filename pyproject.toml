@@ -1,0 +1,14 @@
+[project]
+name = "what-labs-know"
+version = "0.1.0"
+description = "Measure what each AI provider received from your chat and agent history, and what a model can infer from it"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+addopts = "-q"

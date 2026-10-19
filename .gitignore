@@ -1,0 +1,15 @@
+config.json
+chunks/
+stage1/
+stage2/
+scoring/
+ground-truth/
+runs/
+progress.json
+manifest.json
+*.log
+*.stderr
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.coverage
