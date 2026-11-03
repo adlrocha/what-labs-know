@@ -5,7 +5,9 @@ Usage: python3 run.py BASE_DIR LAB [LAB ...]
   BASE_DIR/stage1/<lab>/*.jsonl claims per chunk (resumable: done chunks are skipped)
   BASE_DIR/stage2/<lab>.md      final profile
   BASE_DIR/progress.json        counts only, safe to monitor
-Env: API (default http://localhost:8080/v1), MODEL, WORKERS (default 4).
+Env: API (default http://localhost:8080/v1), MODEL, WORKERS (default 4),
+     WLK_STAGE2_CHARS (claims per merge call, default 200000),
+     WLK_MAX_CLAIMS (claims per chunk in Stage 1, default 40; 0 removes the cap).
      CHAT_CMD: instead of the HTTP API, run this command per call with the system prompt
      appended as the last argument and the user text on stdin (e.g. a headless CLI agent).
 """
@@ -28,9 +30,30 @@ MODEL = os.environ.get("MODEL", "deepseek-v4-flash-0731-spark")
 WORKERS = int(os.environ.get("WORKERS", "4"))
 CHAT_CMD = os.environ.get("CHAT_CMD", "")
 TIMEOUT_S = 7200
-STAGE2_BUDGET_CHARS = 200_000  # ~50k tokens of claims per reduce call
+# ~50k tokens of claims per reduce call; lower it for servers with less than ~96k context.
+STAGE2_BUDGET_CHARS = int(os.environ.get("WLK_STAGE2_CHARS", "200000"))
+TOKENS_PER_CLAIM = 100  # one JSON claim line, with its evidence quote
+MIN_OUTPUT_TOKENS = 4096
+UNCAPPED_OUTPUT_TOKENS = 16384
 
-STAGE1 = """You are an analyst at an AI lab. You have been given a slice of one user's conversation logs with
+
+def parse_max_claims(raw: str) -> int:
+    """Read WLK_MAX_CLAIMS: a whole number of claims per chunk, 0 for no cap."""
+    if not raw.strip().isdigit():
+        raise ValueError(f"WLK_MAX_CLAIMS must be a whole number (0 for no cap), got {raw!r}")
+    return int(raw)
+
+
+def stage1_max_tokens(max_claims: int) -> int:
+    """Output budget for one Stage 1 call, large enough for the cap so answers aren't cut off."""
+    if max_claims == 0:
+        return UNCAPPED_OUTPUT_TOKENS
+    return max(MIN_OUTPUT_TOKENS, max_claims * TOKENS_PER_CLAIM)
+
+
+MAX_CLAIMS = parse_max_claims(os.environ.get("WLK_MAX_CLAIMS", "40"))
+
+STAGE1_BASE = """You are an analyst at an AI lab. You have been given a slice of one user's conversation logs with
 an AI coding and chat assistant: their messages, the assistant's replies, and files or command
 output the assistant read on the user's computer.
 
@@ -49,8 +72,22 @@ Output one JSON object per line, nothing else:
  "evidence": "<quote of 20 words or fewer>", "confidence": 0.0-1.0}
 
 Prefer specific claims ("works at X as Y since Z") over vague ones ("works in tech").
-List at most 40 claims, the most revealing first. Skip trivia about tools and code.
-If the slice reveals nothing about the user, output nothing."""
+"""
+
+
+def stage1_prompt(max_claims: int) -> str:
+    """The Stage 1 system prompt, with the claim cap (0 = no cap)."""
+    cap = (
+        f"List at most {max_claims} claims, the most revealing first."
+        if max_claims
+        else "List the most revealing claims first."
+    )
+    tail = "If the slice reveals nothing about the user, output nothing."
+    return f"{STAGE1_BASE}{cap} Skip trivia about tools and code.\n{tail}"
+
+
+STAGE1 = stage1_prompt(MAX_CLAIMS)
+STAGE1_MAX_TOKENS = stage1_max_tokens(MAX_CLAIMS)
 
 MERGE = """You are the same analyst. Below are claims about one user, one per line as
 category | claim | basis | confidence | sessions. Merge duplicates and near-duplicates. Keep specific
@@ -150,7 +187,7 @@ def stage1(base: Path, lab: str, prog: Progress) -> None:
     prog.update(lab, stage="stage1", **stats)
 
     def work(c: Path) -> tuple[Path, list[dict], int]:
-        claims, bad = parse_claims(chat(STAGE1, c.read_text(encoding="utf-8"), 4096))
+        claims, bad = parse_claims(chat(STAGE1, c.read_text(encoding="utf-8"), STAGE1_MAX_TOKENS))
         return c, claims, bad
 
     with ThreadPoolExecutor(WORKERS) as pool:

@@ -288,6 +288,32 @@ def test_batches_respect_budget() -> None:
     assert run.batches([], 10) == []
 
 
+@pytest.mark.parametrize(("raw", "n"), [("40", 40), ("0", 0), (" 120 ", 120)])
+def test_parse_max_claims(raw: str, n: int) -> None:
+    assert run.parse_max_claims(raw) == n
+
+
+@pytest.mark.parametrize("raw", ["", "-1", "many", "2.5"])
+def test_parse_max_claims_rejects_bad_values(raw: str) -> None:
+    with pytest.raises(ValueError, match="WLK_MAX_CLAIMS must be a whole number"):
+        run.parse_max_claims(raw)
+
+
+def test_stage1_prompt_carries_the_cap() -> None:
+    assert "List at most 40 claims, the most revealing first." in run.stage1_prompt(40)
+    assert "List at most 150 claims" in run.stage1_prompt(150)
+    uncapped = run.stage1_prompt(0)
+    assert "at most" not in uncapped
+    assert "List the most revealing claims first." in uncapped
+    assert uncapped.endswith("If the slice reveals nothing about the user, output nothing.")
+
+
+def test_stage1_max_tokens_grows_with_the_cap() -> None:
+    assert run.stage1_max_tokens(40) == run.MIN_OUTPUT_TOKENS
+    assert run.stage1_max_tokens(150) == 150 * run.TOKENS_PER_CLAIM
+    assert run.stage1_max_tokens(0) == run.UNCAPPED_OUTPUT_TOKENS
+
+
 def test_chat_cmd_passes_system_as_arg_and_user_on_stdin() -> None:
     assert run.chat_cmd(FAKE_LLM, "S", "U").strip() == "SYS=S IN=U"
 
@@ -309,8 +335,11 @@ def test_stage1_then_stage2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         (tmp_path / "chunks" / "lab" / f"c{i}.txt").write_text(f"chunk {i}")
     monkeypatch.setattr(run, "STAGE2_BUDGET_CHARS", 60)
 
+    budgets: list[int] = []
+
     def fake_chat(system: str, user: str, max_tokens: int) -> str:
         if system == run.STAGE1:
+            budgets.append(max_tokens)
             if "chunk 2" in user:
                 raise RuntimeError("boom")
             return "\n".join(json.dumps({"claim": f"{user} fact {j}", "category": "x"}) for j in range(3))
@@ -322,6 +351,7 @@ def test_stage1_then_stage2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(sys, "argv", ["run.py", str(tmp_path), "lab"])
     run.main()
     assert len(list((tmp_path / "stage1" / "lab").glob("*.jsonl"))) == 2
+    assert budgets == [run.STAGE1_MAX_TOKENS] * 3
     assert "boom" in (tmp_path / "errors.log").read_text()
     assert (tmp_path / "stage2" / "lab.md").read_text() == "**P1** merged"
     assert json.loads((tmp_path / "progress.json").read_text())["lab"]["stage"] == "done"
