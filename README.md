@@ -66,6 +66,14 @@ fit a chunk plus the prompt plus ~4k tokens of output**, or the model silently s
 of each chunk. Ollama defaults to a small context: raise `num_ctx`, or shrink chunks with
 `WLK_CHUNK_CHARS` (roughly 3× the context length in tokens).
 
+Stage 1 asks for at most 40 claims per chunk. For a more thorough profile, raise the cap with
+`WLK_MAX_CLAIMS=150`, or set `WLK_MAX_CLAIMS=0` to remove it. The output budget grows with it
+(about 100 tokens per claim, 16k with no cap), so the context window has to fit that too. It
+costs time: without a cap my smoke test produced about 150 claims per chunk and an estimated
+40 hours instead of 5 for the Claude Code share. More claims also make the Stage 2 merges
+bigger; on a server with less than ~96k context, lower `WLK_STAGE2_CHARS` (default 200,000
+characters of claims per merge call).
+
 For scale: my run (1,290 chunks, about 80 MB) took 19 hours on a DGX Spark with
 deepseek-v4-flash at about 75 output tokens/s.
 
@@ -76,7 +84,7 @@ deepseek-v4-flash at about 75 output tokens/s.
 2. **Leak map** (`leak_map.py`): per provider, sessions, dates, megabytes you typed versus
    megabytes your agents read, and how many sessions touch email addresses, money, family,
    health, location, career, your employers and identity. Counts only.
-3. **Stage 1** (`run.py`): for each chunk, up to 40 claims about you as JSON lines, each with
+3. **Stage 1** (`run.py`): for each chunk, up to 40 claims (`WLK_MAX_CLAIMS`) about you as JSON lines, each with
    category, evidence, whether it was stated or inferred, and confidence.
 4. **Stage 2** (`run.py`): merges claims in rounds until they fit one context, then writes a
    profile with numbered claims, "second-order inferences" no single session states, and the
